@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 2000,
       system: `당신은 중국어 학습 도우미입니다. 사용자가 보내는 중국어 수업 내용을 분석해서 다음 형식으로 정리해주세요. 목표: 회화 및 듣기 향상.
 
