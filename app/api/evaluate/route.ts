@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 2000,
       system: '중국어 학습 도우미. 회화/듣기 목표에 맞는 실용적인 평가 문제를 만들어주세요. 한국어로 설명.',
       messages: [{ role: 'user', content: prompt }]
