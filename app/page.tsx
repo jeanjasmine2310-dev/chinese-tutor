@@ -39,42 +39,26 @@ function getWeekKey(date: string) {
   return start.toISOString().split('T')[0]
 }
 
-// 요약에서 문제와 정답을 파싱
 function parseQuizFromSummary(summary: string): QuizQuestion[] {
-  const questions: QuizQuestion[] = []
-
-  // 연습 문제 섹션 찾기
-  const quizMatch = summary.match(/##[^\n]*연습 문제[^\n]*\n([\s\S]*?)(?=##[^\n]*정답|$)/)
-  const answerMatch = summary.match(/##[^\n]*정답[^\n]*\n([\s\S]*)$/)
-
-  if (!quizMatch) return questions
-
-  const quizSection = quizMatch[1]
-  const answerSection = answerMatch ? answerMatch[1] : ''
-
-  // 문제 파싱 (숫자. 또는 숫자) 로 시작하는 줄)
-  const questionLines = quizSection.match(/^\d+[\.\)][^\n]+/gm) || []
-  const answerLines = answerSection.match(/^\d+[\.\)][^\n]+/gm) || []
-
-  questionLines.forEach((q, i) => {
-    const cleanQ = q.replace(/^\d+[\.\)]\s*/, '').trim()
-    const cleanA = answerLines[i] ? answerLines[i].replace(/^\d+[\.\)]\s*/, '').trim() : ''
-    if (cleanQ) {
-      questions.push({
-        question: cleanQ,
-        answer: cleanA,
-        userAnswer: '',
-        result: 'pending'
-      })
-    }
-  })
-
-  return questions
+  try {
+    const marker = '__QUESTIONS__\n'
+    const idx = summary.indexOf(marker)
+    if (idx === -1) return []
+    const json = summary.slice(idx + marker.length)
+    const parsed = JSON.parse(json)
+    return parsed.map((q: any) => ({
+      question: q.question,
+      answer: q.answer,
+      userAnswer: '',
+      result: 'pending' as const
+    }))
+  } catch { return [] }
 }
 
-// 요약에서 문제/정답 섹션 제거하고 순수 정리만 반환
 function getSummaryOnly(summary: string): string {
-  return summary.replace(/##[^\n]*연습 문제[\s\S]*$/, '').trim()
+  const idx = summary.indexOf('__QUESTIONS__')
+  if (idx === -1) return summary.trim()
+  return summary.slice(0, idx).trim()
 }
 
 export default function Home() {
@@ -141,7 +125,6 @@ export default function Home() {
   const submitQuiz = async () => {
     if (!modalLesson) return
 
-    // Claude API로 채점
     const questionsText = quizQuestions.map((q, i) =>
       `문제 ${i+1}: ${q.question}\n정답: ${q.answer}\n내 답: ${q.userAnswer}`
     ).join('\n\n')
@@ -165,7 +148,6 @@ ${questionsText}`,
         const cleaned = data.result.replace(/```json|```/g, '').trim()
         results = JSON.parse(cleaned)
       } catch {
-        // 파싱 실패시 직접 비교
         results = quizQuestions.map(q =>
           q.userAnswer.trim() === q.answer.trim() ? 'correct' : 'incorrect'
         )
@@ -180,7 +162,6 @@ ${questionsText}`,
       setScore({ correct, total: updated.length })
       setQuizSubmitted(true)
     } catch {
-      // 오류시 직접 비교
       const updated = quizQuestions.map(q => ({
         ...q,
         result: (q.userAnswer.trim() === q.answer.trim() ? 'correct' : 'incorrect') as 'correct' | 'incorrect' | 'pending'
@@ -223,7 +204,12 @@ ${questionsText}`,
         body: JSON.stringify({ text, imageBase64: imgBase64 })
       })
       const data = await res.json()
-      setResult(data.result)
+      if (data.questions && data.questions.length > 0) {
+        const combined = data.result + '\n\n__QUESTIONS__\n' + JSON.stringify(data.questions)
+        setResult(combined)
+      } else {
+        setResult(data.result)
+      }
     } catch {
       setResult('오류가 발생했습니다. 다시 시도해주세요.')
     }
@@ -232,7 +218,8 @@ ${questionsText}`,
 
   const saveLesson = () => {
     if (!result) { alert('먼저 수업을 분석해주세요'); return }
-    const rowMatches = result.match(/\|[^|\n]+\|[^|\n]+\|[^|\n]+\|/g) || []
+    const summaryOnly = getSummaryOnly(result)
+    const rowMatches = summaryOnly.match(/\|[^|\n]+\|[^|\n]+\|[^|\n]+\|/g) || []
     const lesson: Lesson = {
       id: Date.now(),
       date: date || new Date().toISOString().split('T')[0],
@@ -240,7 +227,7 @@ ${questionsText}`,
       text,
       summary: result,
       wordCount: Math.max(0, rowMatches.length - 1),
-      grammarCount: (result.match(/^\d+\./gm) || []).length
+      grammarCount: (summaryOnly.match(/^\d+\./gm) || []).length
     }
     const updated = [lesson, ...lessons].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     setLessons(updated)
@@ -377,7 +364,6 @@ ${questionsText}`,
                   </div>
                 ) : (
                   <>
-                    {/* 점수 표시 */}
                     {quizSubmitted && score && (
                       <div style={{
                         background: score.correct === score.total ? '#f0faf4' : score.correct >= score.total/2 ? '#fffbea' : '#fff5f5',
@@ -404,7 +390,6 @@ ${questionsText}`,
                       </div>
                     )}
 
-                    {/* 문제 목록 */}
                     {quizQuestions.map((q, i) => (
                       <div
                         key={i}
@@ -454,7 +439,6 @@ ${questionsText}`,
                       </div>
                     ))}
 
-                    {/* 제출 버튼 */}
                     {!quizSubmitted && (
                       <button
                         className="btn btn-primary btn-full"
@@ -520,9 +504,9 @@ ${questionsText}`,
 
           {result && (
             <div>
-              <div className="result-box">{result}</div>
+              <div className="result-box">{getSummaryOnly(result)}</div>
               <div className="btn-row">
-                <button className="btn btn-sm" onClick={() => copy(result)}>복사하기</button>
+                <button className="btn btn-sm" onClick={() => copy(getSummaryOnly(result))}>복사하기</button>
                 <button className="btn btn-red btn-sm" onClick={saveLesson}>이 수업 저장하기</button>
               </div>
             </div>
