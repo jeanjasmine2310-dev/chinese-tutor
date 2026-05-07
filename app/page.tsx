@@ -11,6 +11,13 @@ type Lesson = {
   grammarCount: number
 }
 
+type QuizQuestion = {
+  question: string
+  answer: string
+  userAnswer: string
+  result: 'correct' | 'incorrect' | 'pending'
+}
+
 const STORAGE_KEY = 'chinese_tutor_lessons'
 
 function loadLessons(): Lesson[] {
@@ -32,6 +39,44 @@ function getWeekKey(date: string) {
   return start.toISOString().split('T')[0]
 }
 
+// 요약에서 문제와 정답을 파싱
+function parseQuizFromSummary(summary: string): QuizQuestion[] {
+  const questions: QuizQuestion[] = []
+
+  // 연습 문제 섹션 찾기
+  const quizMatch = summary.match(/##\s*✏️\s*연습 문제[^\n]*\n([\s\S]*?)(?=##\s*✅|$)/)
+  const answerMatch = summary.match(/##\s*✅\s*정답[^\n]*\n([\s\S]*)$/)
+
+  if (!quizMatch) return questions
+
+  const quizSection = quizMatch[1]
+  const answerSection = answerMatch ? answerMatch[1] : ''
+
+  // 문제 파싱 (숫자. 또는 숫자) 로 시작하는 줄)
+  const questionLines = quizSection.match(/^\d+[\.\)][^\n]+/gm) || []
+  const answerLines = answerSection.match(/^\d+[\.\)][^\n]+/gm) || []
+
+  questionLines.forEach((q, i) => {
+    const cleanQ = q.replace(/^\d+[\.\)]\s*/, '').trim()
+    const cleanA = answerLines[i] ? answerLines[i].replace(/^\d+[\.\)]\s*/, '').trim() : ''
+    if (cleanQ) {
+      questions.push({
+        question: cleanQ,
+        answer: cleanA,
+        userAnswer: '',
+        result: 'pending'
+      })
+    }
+  })
+
+  return questions
+}
+
+// 요약에서 문제/정답 섹션 제거하고 순수 정리만 반환
+function getSummaryOnly(summary: string): string {
+  return summary.replace(/##\s*✏️\s*연습 문제[\s\S]*$/, '').trim()
+}
+
 export default function Home() {
   const [tab, setTab] = useState<'input' | 'history' | 'weekly' | 'monthly'>('input')
   const [lessons, setLessons] = useState<Lesson[]>([])
@@ -45,7 +90,14 @@ export default function Home() {
   const [imgPreview, setImgPreview] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [result, setResult] = useState('')
-  const [modalContent, setModalContent] = useState('')
+
+  // Modal
+  const [modalLesson, setModalLesson] = useState<Lesson | null>(null)
+  const [modalTab, setModalTab] = useState<'summary' | 'quiz'>('summary')
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([])
+  const [quizSubmitted, setQuizSubmitted] = useState(false)
+  const [score, setScore] = useState<{correct: number, total: number} | null>(null)
+
   // Weekly
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [weeklyLoading, setWeeklyLoading] = useState(false)
@@ -63,6 +115,89 @@ export default function Home() {
     setLessons(loadLessons())
     setDate(new Date().toISOString().split('T')[0])
   }, [])
+
+  const openModal = (lesson: Lesson) => {
+    setModalLesson(lesson)
+    setModalTab('summary')
+    const parsed = parseQuizFromSummary(lesson.summary)
+    setQuizQuestions(parsed)
+    setQuizSubmitted(false)
+    setScore(null)
+  }
+
+  const closeModal = () => {
+    setModalLesson(null)
+    setQuizQuestions([])
+    setQuizSubmitted(false)
+    setScore(null)
+  }
+
+  const handleQuizAnswer = (index: number, value: string) => {
+    const updated = [...quizQuestions]
+    updated[index] = { ...updated[index], userAnswer: value }
+    setQuizQuestions(updated)
+  }
+
+  const submitQuiz = async () => {
+    if (!modalLesson) return
+
+    // Claude API로 채점
+    const questionsText = quizQuestions.map((q, i) =>
+      `문제 ${i+1}: ${q.question}\n정답: ${q.answer}\n내 답: ${q.userAnswer}`
+    ).join('\n\n')
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `다음 중국어 연습문제의 답안을 채점해주세요. 각 문제에 대해 맞았는지(correct) 틀렸는지(incorrect)를 JSON 배열로만 반환해주세요.
+형식: ["correct","incorrect","correct",...]
+
+${questionsText}`,
+          imageBase64: null,
+          grading: true
+        })
+      })
+      const data = await res.json()
+      let results: string[] = []
+      try {
+        const cleaned = data.result.replace(/```json|```/g, '').trim()
+        results = JSON.parse(cleaned)
+      } catch {
+        // 파싱 실패시 직접 비교
+        results = quizQuestions.map(q =>
+          q.userAnswer.trim() === q.answer.trim() ? 'correct' : 'incorrect'
+        )
+      }
+
+      const updated = quizQuestions.map((q, i) => ({
+        ...q,
+        result: (results[i] === 'correct' ? 'correct' : 'incorrect') as 'correct' | 'incorrect' | 'pending'
+      }))
+      setQuizQuestions(updated)
+      const correct = updated.filter(q => q.result === 'correct').length
+      setScore({ correct, total: updated.length })
+      setQuizSubmitted(true)
+    } catch {
+      // 오류시 직접 비교
+      const updated = quizQuestions.map(q => ({
+        ...q,
+        result: (q.userAnswer.trim() === q.answer.trim() ? 'correct' : 'incorrect') as 'correct' | 'incorrect' | 'pending'
+      }))
+      setQuizQuestions(updated)
+      const correct = updated.filter(q => q.result === 'correct').length
+      setScore({ correct, total: updated.length })
+      setQuizSubmitted(true)
+    }
+  }
+
+  const resetQuiz = () => {
+    const reset = quizQuestions.map(q => ({ ...q, userAnswer: '', result: 'pending' as const }))
+    setQuizQuestions(reset)
+    setQuizSubmitted(false)
+    setScore(null)
+  }
 
   const handleImg = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -122,7 +257,6 @@ export default function Home() {
     saveLessons(updated)
   }
 
-  // Group by week
   const byWeek: Record<string, Lesson[]> = {}
   lessons.forEach(l => {
     const k = getWeekKey(l.date)
@@ -181,20 +315,163 @@ export default function Home() {
 
   return (
     <div className="app-wrapper">
-      {modalContent && (
-  <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'20px',overflowY:'auto'}} onClick={() => setModalContent('')}>
-    <div style={{background:'white',borderRadius:'16px',padding:'24px',maxWidth:'700px',width:'100%',marginTop:'20px',whiteSpace:'pre-wrap',lineHeight:1.8,fontSize:'14px'}} onClick={e => e.stopPropagation()}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
-        <strong style={{fontSize:'16px'}}>수업 정리</strong>
-        <button onClick={() => setModalContent('')} style={{border:'none',background:'none',fontSize:'24px',cursor:'pointer',color:'#999'}}>✕</button>
-      </div>
-      {modalContent}
-      <div style={{marginTop:'16px',textAlign:'right'}}>
-        <button className="btn btn-sm" onClick={() => copy(modalContent)}>복사하기</button>
-      </div>
-    </div>
-  </div>
-)}
+
+      {/* 모달 */}
+      {modalLesson && (
+        <div
+          style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'16px',overflowY:'auto'}}
+          onClick={closeModal}
+        >
+          <div
+            style={{background:'white',borderRadius:'20px',width:'100%',maxWidth:'720px',marginTop:'16px',marginBottom:'16px',overflow:'hidden'}}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* 모달 헤더 */}
+            <div style={{padding:'20px 24px 0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:'17px',color:'#1a1a1a'}}>{modalLesson.num}회차 수업</div>
+                <div style={{fontSize:'13px',color:'#888',marginTop:'2px'}}>{modalLesson.date}</div>
+              </div>
+              <button onClick={closeModal} style={{border:'none',background:'#f0f0f0',borderRadius:'50%',width:'32px',height:'32px',fontSize:'18px',cursor:'pointer',color:'#666',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+            </div>
+
+            {/* 모달 탭 */}
+            <div style={{display:'flex',gap:'0',padding:'16px 24px 0',borderBottom:'1.5px solid #f0f0f0'}}>
+              {(['summary','quiz'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setModalTab(t)}
+                  style={{
+                    padding:'8px 20px',
+                    border:'none',
+                    background:'none',
+                    cursor:'pointer',
+                    fontSize:'14px',
+                    fontWeight: modalTab === t ? 700 : 400,
+                    color: modalTab === t ? 'var(--red, #8B1A1A)' : '#888',
+                    borderBottom: modalTab === t ? '2.5px solid var(--red, #8B1A1A)' : '2.5px solid transparent',
+                    marginBottom:'-1.5px'
+                  }}
+                >
+                  {t === 'summary' ? '📚 수업 정리' : '✏️ 연습 문제'}
+                </button>
+              ))}
+            </div>
+
+            {/* 수업 정리 탭 */}
+            {modalTab === 'summary' && (
+              <div style={{padding:'20px 24px',maxHeight:'70vh',overflowY:'auto',whiteSpace:'pre-wrap',lineHeight:1.9,fontSize:'14px',color:'#222'}}>
+                {getSummaryOnly(modalLesson.summary)}
+                <div style={{marginTop:'16px',textAlign:'right'}}>
+                  <button className="btn btn-sm" onClick={() => copy(getSummaryOnly(modalLesson.summary))}>복사하기</button>
+                </div>
+              </div>
+            )}
+
+            {/* 연습 문제 탭 */}
+            {modalTab === 'quiz' && (
+              <div style={{padding:'20px 24px',maxHeight:'70vh',overflowY:'auto'}}>
+                {quizQuestions.length === 0 ? (
+                  <div style={{textAlign:'center',color:'#aaa',padding:'40px 0',fontSize:'14px'}}>
+                    문제를 불러올 수 없어요.<br/>수업 내용에 연습 문제가 포함되어 있는지 확인해주세요.
+                  </div>
+                ) : (
+                  <>
+                    {/* 점수 표시 */}
+                    {quizSubmitted && score && (
+                      <div style={{
+                        background: score.correct === score.total ? '#f0faf4' : score.correct >= score.total/2 ? '#fffbea' : '#fff5f5',
+                        border: `1.5px solid ${score.correct === score.total ? '#4caf7d' : score.correct >= score.total/2 ? '#f0c040' : '#e07070'}`,
+                        borderRadius:'12px',
+                        padding:'16px 20px',
+                        marginBottom:'20px',
+                        textAlign:'center'
+                      }}>
+                        <div style={{fontSize:'28px',fontWeight:800,color: score.correct === score.total ? '#2d8a5e' : score.correct >= score.total/2 ? '#b07d00' : '#c0392b'}}>
+                          {score.correct} / {score.total}
+                        </div>
+                        <div style={{fontSize:'14px',color:'#666',marginTop:'4px'}}>
+                          {score.correct === score.total ? '🎉 완벽해요! 모두 맞았어요!' :
+                           score.correct >= score.total/2 ? '👍 잘 했어요! 조금만 더 연습해요!' :
+                           '💪 다시 한번 도전해봐요!'}
+                        </div>
+                        <button
+                          onClick={resetQuiz}
+                          style={{marginTop:'10px',padding:'6px 16px',border:'1px solid #ddd',borderRadius:'8px',background:'white',cursor:'pointer',fontSize:'13px',color:'#555'}}
+                        >
+                          다시 풀기
+                        </button>
+                      </div>
+                    )}
+
+                    {/* 문제 목록 */}
+                    {quizQuestions.map((q, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          marginBottom:'20px',
+                          padding:'16px',
+                          borderRadius:'12px',
+                          border: quizSubmitted
+                            ? q.result === 'correct' ? '1.5px solid #4caf7d' : '1.5px solid #e07070'
+                            : '1.5px solid #eee',
+                          background: quizSubmitted
+                            ? q.result === 'correct' ? '#f7fdf9' : '#fff8f8'
+                            : 'white'
+                        }}
+                      >
+                        <div style={{fontSize:'14px',fontWeight:600,color:'#333',marginBottom:'10px',lineHeight:1.6}}>
+                          <span style={{color:'var(--red,#8B1A1A)',marginRight:'6px'}}>Q{i+1}.</span>
+                          {q.question}
+                        </div>
+                        <input
+                          type="text"
+                          value={q.userAnswer}
+                          onChange={e => handleQuizAnswer(i, e.target.value)}
+                          disabled={quizSubmitted}
+                          placeholder="답을 입력하세요..."
+                          style={{
+                            width:'100%',
+                            padding:'10px 14px',
+                            border:'1px solid #e0e0e0',
+                            borderRadius:'8px',
+                            fontSize:'14px',
+                            boxSizing:'border-box',
+                            background: quizSubmitted ? '#f9f9f9' : 'white',
+                            color:'#333'
+                          }}
+                        />
+                        {quizSubmitted && (
+                          <div style={{marginTop:'8px',fontSize:'13px'}}>
+                            <span style={{color: q.result === 'correct' ? '#2d8a5e' : '#c0392b',fontWeight:600}}>
+                              {q.result === 'correct' ? '✓ 정답!' : '✗ 오답'}
+                            </span>
+                            {q.result === 'incorrect' && q.answer && (
+                              <span style={{color:'#888',marginLeft:'8px'}}>정답: {q.answer}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {/* 제출 버튼 */}
+                    {!quizSubmitted && (
+                      <button
+                        className="btn btn-primary btn-full"
+                        onClick={submitQuiz}
+                        style={{marginTop:'4px'}}
+                      >
+                        제출하고 채점하기 →
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <header className="app-header">
         <h1 className="app-title">중국어 수업 노트</h1>
         <p className="app-subtitle">회화 · 듣기 집중 학습 트래커</p>
@@ -278,7 +555,7 @@ export default function Home() {
                         <div className="lesson-meta">{l.date} · 단어 {l.wordCount}개 · 문법 {l.grammarCount}개</div>
                       </div>
                       <div className="lesson-actions">
-                        <button className="btn btn-sm" onClick={() => setModalContent(l.summary)}>보기</button>
+                        <button className="btn btn-sm" onClick={() => openModal(l)}>보기</button>
                         <button className="btn btn-sm" style={{color:'var(--red)'}} onClick={() => deleteLesson(l.id)}>삭제</button>
                       </div>
                     </div>
