@@ -45,7 +45,7 @@ export default function Home() {
   const [imgPreview, setImgPreview] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [result, setResult] = useState('')
-
+  const [modalContent, setModalContent] = useState('')
   // Weekly
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [weeklyLoading, setWeeklyLoading] = useState(false)
@@ -181,6 +181,20 @@ export default function Home() {
 
   return (
     <div className="app-wrapper">
+      {modalContent && (
+  <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'20px',overflowY:'auto'}} onClick={() => setModalContent('')}>
+    <div style={{background:'white',borderRadius:'16px',padding:'24px',maxWidth:'700px',width:'100%',marginTop:'20px',whiteSpace:'pre-wrap',lineHeight:1.8,fontSize:'14px'}} onClick={e => e.stopPropagation()}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+        <strong style={{fontSize:'16px'}}>수업 정리</strong>
+        <button onClick={() => setModalContent('')} style={{border:'none',background:'none',fontSize:'24px',cursor:'pointer',color:'#999'}}>✕</button>
+      </div>
+      {modalContent}
+      <div style={{marginTop:'16px',textAlign:'right'}}>
+        <button className="btn btn-sm" onClick={() => copy(modalContent)}>복사하기</button>
+      </div>
+    </div>
+  </div>
+)}
       <header className="app-header">
         <h1 className="app-title">중국어 수업 노트</h1>
         <p className="app-subtitle">회화 · 듣기 집중 학습 트래커</p>
@@ -264,7 +278,7 @@ export default function Home() {
                         <div className="lesson-meta">{l.date} · 단어 {l.wordCount}개 · 문법 {l.grammarCount}개</div>
                       </div>
                       <div className="lesson-actions">
-                        <button className="btn btn-sm" onClick={() => alert(l.summary)}>보기</button>
+                        <button className="btn btn-sm" onClick={() => setModalContent(l.summary)}>보기</button>
                         <button className="btn btn-sm" style={{color:'var(--red)'}} onClick={() => deleteLesson(l.id)}>삭제</button>
                       </div>
                     </div>
