@@ -44,8 +44,8 @@ function parseQuizFromSummary(summary: string): QuizQuestion[] {
   const questions: QuizQuestion[] = []
 
   // 연습 문제 섹션 찾기
-  const quizMatch = summary.match(/##\s*✏️\s*연습 문제[^\n]*\n([\s\S]*?)(?=##\s*✅|$)/)
-  const answerMatch = summary.match(/##\s*✅\s*정답[^\n]*\n([\s\S]*)$/)
+  const quizMatch = summary.match(/##[^\n]*연습 문제[^\n]*\n([\s\S]*?)(?=##[^\n]*정답|$)/)
+  const answerMatch = summary.match(/##[^\n]*정답[^\n]*\n([\s\S]*)$/)
 
   if (!quizMatch) return questions
 
@@ -74,7 +74,7 @@ function parseQuizFromSummary(summary: string): QuizQuestion[] {
 
 // 요약에서 문제/정답 섹션 제거하고 순수 정리만 반환
 function getSummaryOnly(summary: string): string {
-  return summary.replace(/##\s*✏️\s*연습 문제[\s\S]*$/, '').trim()
+  return summary.replace(/##[^\n]*연습 문제[\s\S]*$/, '').trim()
 }
 
 export default function Home() {
