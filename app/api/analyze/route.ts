@@ -68,13 +68,13 @@ export async function POST(req: NextRequest) {
   const raw = data.content?.map((c: any) => c.text || '').join('\n') || ''
 
   try {
-    const parsed = JSON.parse(raw)
+    const cleaned = raw.replace(/```json|```/g, '').trim()
+    const parsed = JSON.parse(cleaned)
     return NextResponse.json({
       result: parsed.summary,
       questions: parsed.questions
     })
   } catch {
-    // JSON 파싱 실패시 raw 텍스트 그대로 반환
     return NextResponse.json({ result: raw, questions: [] })
   }
 }
